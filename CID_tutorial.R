@@ -178,5 +178,3 @@
     d_res = summ_survprob(d_surv)
 
 # End ----
-  
-clear_dta()
