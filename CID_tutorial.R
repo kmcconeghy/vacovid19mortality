@@ -1,40 +1,44 @@
 
 # Setup -------------------------------------------------------------------
-
-library(data.table)
-library(splines)
-library(fst)
-library(parglm)
+  # important packages for the project
+  library(data.table) # helps with large data manipulations
+  library(splines) # for spline terms
+  library(parglm) # glm model alternative, allows parallel computing 
 
   ## load data ----
-    d_ipw = read_fst(here('dbdf', 'c19d_chrt_lng_ipw.fst'))
+    # d_ipw = [INSERT YOUR DATA HERE]
+    # longitudinal dataset, person-period with baseline time fixed variables and time-varying
+    # Outcome is censoring event (vaccination)
+    # includes both baseline and time-fixed covariates
 
-## sample ----
-  if (F) {
-    d_ipw = d_ipw %>%
-      inner_join(
-      slice_sample(distinct(., PatientICN), prop=0.1),
-      .,
-      by = 'PatientICN')
-    
-    d_surv = inner_join(d_surv, distinct(d_ipw, PatientICN))
-  }
+  ## sample ----
+    # FOR TEST RUNS
+    if (F) {
+      d_ipw = d_ipw %>%
+        inner_join(
+        slice_sample(distinct(., PatientICN), prop=0.1),
+        .,
+        by = 'PatientICN')
+      
+      d_surv = inner_join(d_surv, distinct(d_ipw, PatientICN))
+    }
 
 # IPW weights ----
-
   ## Set up IPW data
     setDT(d_ipw, key=c('PatientICN'))
-    
+
+    # create some model vars, interactions etc.
     d_ipw = d_ipw[, `:=`(
       intercept = 1,
       day2 = day*day,
-      dayXhr = day*dx_hr_1p,
+      dayXhr = day*dx_hr_1p, 
       day2Xhr = day*day*dx_hr_1p,
       can_t2 = can_t*can_t,
       can_b2 = can_b*can_b,
       dem_age2 = dem_age*dem_age
     )]
-    
+
+    # generate matrix with regression variables
     d_xmat = select(d_ipw, 
                     intercept, day, day2, dayXhr, day2Xhr, dx_hr_1p,
                     can_t, can_t2, can_b, can_b2,
@@ -46,30 +50,31 @@ library(parglm)
                     dx_DMany, dx_Renal, dx_NeuroOther, 
                     dem_afam) %>%
       data.matrix(.)
-    
+
+    # once I make matrix I don't need those variables in my dataset
     d_ipw = d_ipw[, .(PatientICN, index, day, vacc)]
     
-  ## Estimate model ----
-
+  # Estimate model ----
     d_glm_ipw = parglm.fit(
-      y = d_ipw$vacc,
-      x = d_xmat,
+      y = d_ipw$vacc, # vacc is vaccine event (censoring)
+      x = d_xmat, # matrix
       family=binomial(),
-      #start = d_glm_pe$coef,
       model=F,
+      # control sets some regression step parameters
       control = parglm.control(method="FAST",
                                nthreads=10,
                                epsilon = 1e-7,
                                maxit=25)
     ) 
-  
-    saveRDS(d_glm_ipw$coef, here('output', 
-                                'nocov_adjus_wt', 
-                                'c19d_ipw_coefs.Rds'))
+
   ## compute weights ----
+    # Pr (vacc=1) at each timepoint
     d_ipw$pr_vacc = d_glm_ipw$fitted.values
     
     d_surv = read_fst(here('dbdf', 'c19d_chrt_lng_surv.fst'))
+    # Outcome now death event
+    # longitudinal dataset 
+
     grp_nms = c('PatientICN', 'treat', 'index')
     setDT(d_surv, key=grp_nms)
     
