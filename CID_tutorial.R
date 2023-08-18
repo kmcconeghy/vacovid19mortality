@@ -68,89 +68,88 @@
     ) 
 
   ## compute weights ----
-    # Pr (vacc=1) at each timepoint
+    # Pr (vacc=1) at each timepoint from the model
     d_ipw$pr_vacc = d_glm_ipw$fitted.values
     
-    d_surv = read_fst(here('dbdf', 'c19d_chrt_lng_surv.fst'))
+    #d_surv = [INSERT YOUR DATA HERE]
     # Outcome now death event
-    # longitudinal dataset 
+    # longitudinal dataset, person-period
+    # Only needs baseline characteristics
 
-    grp_nms = c('PatientICN', 'treat', 'index')
-    setDT(d_surv, key=grp_nms)
+      # groups for merging datasets
+        grp_nms = c('PatientICN', 'treat', 'index')
+        setDT(d_surv, key=grp_nms)
     
-    # Data.table left join for pr_vacc for speed
-    d_surv[, 
-           pr_vacc := d_ipw[d_surv, 
-                            on = .(PatientICN, index, day), 
-                            x.pr_vacc]
-           ]
+      # Data.table left join for pr_vacc for speed
+        d_surv[, 
+               pr_vacc := d_ipw[d_surv, 
+                                on = .(PatientICN, index, day), 
+                                x.pr_vacc]
+               ]
     
-    rm(d_ipw, d_glm_ipw)
+      # IF TREAT = 1; Pr(no censor) = pr_den; 
+      # IF TREAT = 0; Pr(no cens) = 1 - pr_den;
+        d_surv[, pr_den_a := treat*(pr_vacc) + (1-treat)*(1-pr_vacc)]
     
-    # IF TREAT = 1; Pr(no censor) = pr_den; 
-    # IF TREAT = 0; Pr(no cens) = 1 - pr_den;
-    
-    d_surv[, pr_den_a := treat*(pr_vacc) + (1-treat)*(1-pr_vacc)]
-    
-    # If assigned no vaccine, 1 / pr(no cens) for teach timepoint ----
-    # if assign vaccine, 1 / 1 before end of grace (cannot censor)
-    # you get vaccine at end of grace (day 7), 1 / pr(no cens)
-    # you get vaccine before day 7, 1 / 1  thereafter (because cannot censor after you get vaccine)
-    grace = 7
-    
-    d_surv[, `:=`(ipw_us = fcase(treat == 0, 1 / pr_den_a,
-                                      treat == 1 & day < grace, 1 / 1,
-                                      treat == 1 & day == grace & t_vacc==grace, 1 / pr_den_a,
-                                      treat == 1 & day == grace & t_vacc<grace, 1 / 1,
-                                      treat == 1 & day > grace, 1 / 1))] 
-    
-    
-    d_surv[, `:=`(ipw_us_c = cumprod(ipw_us)), by=grp_nms] 
-    
-    quantile(d_surv$ipw_us_c, c(seq(0.97, 1, 0.0025)))
-    
-    trunc = 0.001
-    
-    d_tau = quantile(d_surv$ipw_us_c, 1-trunc)
-    d_surv$ipw_us_t = d_surv$ipw_us_c
-    d_surv$ipw_us_t[d_surv$ipw_us_c >= d_tau] = d_tau
-    
-    quantile(d_surv$ipw_us_t, c(seq(0.97, 1, 0.0025)))
+      # If assigned no vaccine, 1 / pr(no cens) for teach timepoint ----
+      # if assign vaccine, 1 / 1 before end of grace (cannot censor)
+      # you get vaccine at end of grace (day 7), 1 / pr(no cens)
+      # you get vaccine before day 7, 1 / 1  thereafter (because cannot censor after you get vaccine)
+        grace = 7
+      
+        d_surv[, `:=`(ipw_us = fcase(treat == 0, 1 / pr_den_a,
+                                          treat == 1 & day < grace, 1 / 1,
+                                          treat == 1 & day == grace & t_vacc==grace, 1 / pr_den_a,
+                                          treat == 1 & day == grace & t_vacc<grace, 1 / 1,
+                                          treat == 1 & day > grace, 1 / 1))] 
+      
+      # with ipw calculated, now take cumulative product
+        d_surv[, `:=`(ipw_us_c = cumprod(ipw_us)), by=grp_nms] 
+        quantile(d_surv$ipw_us_c, c(seq(0.97, 1, 0.0025)))
+
+      # truncate IPW
+        trunc = 0.001
+        
+        d_tau = quantile(d_surv$ipw_us_c, 1-trunc)
+        d_surv$ipw_us_t = d_surv$ipw_us_c
+        d_surv$ipw_us_t[d_surv$ipw_us_c >= d_tau] = d_tau
+      
+        quantile(d_surv$ipw_us_t, c(seq(0.97, 1, 0.0025)))
     
 # Survival curves ----
+
+    # generate spline for time ----
+      d_bs_day = as.data.frame(bs(1:60, df=5)) %>%
+        mutate(day=1:60)
+      
+      colnames(d_bs_day) = c('day1', 'day2', 'day3', 'day4', 'day5', 'day')
+      setDT(d_bs_day)
+      
+      d_surv = d_bs_day[d_surv, on = c('day')]
+      
+      d_surv = d_surv[, `:=`(
+        intercept = 1,
+        can_b2 = can_b*can_b,
+        dem_age2 = dem_age*dem_age
+      )]
     
-    d_bs_day = as.data.frame(bs(1:60, df=5)) %>%
-      mutate(day=1:60)
-    
-    colnames(d_bs_day) = c('day1', 'day2', 'day3', 'day4', 'day5', 'day')
-    setDT(d_bs_day)
-    
-    d_surv = d_bs_day[d_surv, on = c('day')]
-    
-    d_surv = d_surv[, `:=`(
-      intercept = 1,
-      can_b2 = can_b*can_b,
-      dem_age2 = dem_age*dem_age
-    )]
-    
-    d_xmat = select(d_surv, 
-                    intercept, day1, day2, day3, day4, day5,
-                    can_b, can_b2, dem_age, vacc_flu, hsr_ip, 
-                    hsr_rx, hsr_lb_any, hsr_lb_trpn, dx_UnstablyHoused,
-                    dx_WeightLoss, dx_Mace, dx_DMany, dx_Renal, 
-                    dx_NeuroOther, dx_Anemia, dx_PVD, dx_hr_1p, 
-                    dx_Pulmonary, dem_afam) %>%
-      data.matrix(.)
-    
-    d_surv = setDF(d_surv) %>%
-      select(event, day, treat, ipw_us_t)
+      d_xmat = select(d_surv, 
+                      intercept, day1, day2, day3, day4, day5,
+                      can_b, can_b2, dem_age, vacc_flu, hsr_ip, 
+                      hsr_rx, hsr_lb_any, hsr_lb_trpn, dx_UnstablyHoused,
+                      dx_WeightLoss, dx_Mace, dx_DMany, dx_Renal, 
+                      dx_NeuroOther, dx_Anemia, dx_PVD, dx_hr_1p, 
+                      dx_Pulmonary, dem_afam) %>%
+        data.matrix(.)
+      
+      d_surv = setDF(d_surv) %>%
+        select(event, day, treat, ipw_us_t)
   
-  ## Estimate survival ----
+  ## Estimate survival separately for each model ----
     d_glm_pe_t0 = parglm.fit(
       y = d_surv$event[d_surv$treat==0],
       x = d_xmat[d_surv$treat==0, ],
       family=binomial(),
-      #start = d_glm_pe$coef,
       weights = d_surv$ipw_us_t[d_surv$treat==0],
       model=F,
       control = parglm.control(method="FAST",
@@ -159,15 +158,10 @@
                                maxit=25)
     ) 
     
-    saveRDS(d_glm_pe_t0$coef, here('output', 
-                                'full_adjus_wt', 
-                                'c19d_surv_t0_coefs.Rds'))
-    
     d_glm_pe_t1 = parglm.fit(
       y = d_surv$event[d_surv$treat==1],
       x = d_xmat[d_surv$treat==1, ],
       family=binomial(),
-      #start = d_glm_pe$coef,
       weights = d_surv$ipw_us_t[d_surv$treat==1],
       model=F,
       control = parglm.control(method="FAST",
@@ -176,22 +170,12 @@
                                maxit=25)
     ) 
     
-    saveRDS(d_glm_pe_t1$coef, here('output', 
-                                   'full_adjus_wt', 
-                                   'c19d_surv_t1_coefs.Rds'))
-    
   ## Survival probabilities ----
     d_surv$pr_ev = NA_real_
     d_surv$pr_ev[d_surv$treat==1] = d_glm_pe_t1$fitted.values
     d_surv$pr_ev[d_surv$treat==0] = d_glm_pe_t0$fitted.values
     
     d_res = summ_survprob(d_surv)
-    
-    write_csv(d_res, 
-              file = here('output', 'full_adjus_wt',
-                          paste0('c19d_pld_pe.', tstmp(), '.csv')
-              )
-    )
 
 # End ----
   
