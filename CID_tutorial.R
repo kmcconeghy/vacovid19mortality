@@ -175,6 +175,18 @@
     d_surv$pr_ev[d_surv$treat==1] = d_glm_pe_t1$fitted.values
     d_surv$pr_ev[d_surv$treat==0] = d_glm_pe_t0$fitted.values
     
-    d_res = summ_survprob(d_surv)
+          d_surv[, `:=`(pr_surv = cumprod(1 - pr_ev)), by=grp_nms] 
+      
+      d_res = d_surv %>%
+        group_by(treat, day) %>%
+          summarize(pr_ev = weighted.mean(1-pr_surv, freqwt)) %>%
+        ungroup %>%
+        pivot_wider(., id_cols =c('day'), 
+                    names_from = treat, 
+                    names_prefix = 'pr_ev_',
+                    values_from = pr_ev
+        ) %>%
+        mutate(cid = pr_ev_1 - pr_ev_0,
+               cir = pr_ev_1 / pr_ev_0)
 
 # End ----
