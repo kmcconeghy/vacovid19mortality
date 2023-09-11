@@ -2,25 +2,30 @@
 # Setup -------------------------------------------------------------------
   library(data.table)
   library(splines)
-  library(fst)
   library(parglm)
   options(dplyr.summarise.inform=F)
   
-  d_start = read_fst(here('dbdf', 'c19d_chrt_lng_ipw.fst'))
+  #d_start = [INSERT YOUR starting dataset]
 
 # Bootstrap function ----
   boot_it = function(d_ipw) {
-    
-      setDT(d_ipw, key = 'PatientICN')
-    
-      d_ids = unique(d_ipw[,.(PatientICN)])
+
+      # Key by Person ID 
+      setDT(d_ipw, key = 'ID')
+
+      # A list of unique persons
+      d_ids = unique(d_ipw[,.(ID)])
+
+      # generate a random value for each person (~Poisson(1))
       d_ids[, freqwt := rpois(.N, 1)]
-      
+
+      # add back to dataset
       d_ipw[, freqwt := d_ids[d_ipw, 
-                              on = .(PatientICN),
+                              on = .(ID),
                               x.freqwt]
             ]
-      
+
+    # make some covariates for regression
       d_ipw = d_ipw[, `:=`(
         intercept = 1,
         day2 = day*day,
@@ -30,7 +35,8 @@
         can_b2 = can_b*can_b,
         dem_age2 = dem_age*dem_age
       )]
-      
+
+    # Matrix
       d_xmat = select(d_ipw, 
                       intercept, day, day2, dayXhr, day2Xhr, dx_hr_1p,
                       can_t, can_t2, can_b, can_b2,
@@ -42,9 +48,11 @@
                       dx_DMany, dx_Renal, dx_NeuroOther, 
                       dem_afam) %>%
         data.matrix(.)
-      
-      d_ipw = d_ipw[, .(PatientICN, index, day, vacc, freqwt)]
-  
+
+      # dont need covariates (this is a big dataset so I drop, but step not necessary)
+      #d_ipw = d_ipw[, .(ID, index, day, vacc, freqwt)]
+
+      # fit censoring model
       d_glm_ipw = parglm.fit(
         y = d_ipw$vacc,
         x = d_xmat,
