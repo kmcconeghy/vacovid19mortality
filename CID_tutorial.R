@@ -56,7 +56,7 @@
     
   # Estimate model ----
     d_glm_ipw = parglm.fit(
-      y = d_ipw$vacc, # vacc is vaccine event (censoring)
+      y = d_ipw$vacc, # vacc is vaccine event
       x = d_xmat, # matrix
       family=binomial(),
       model=F,
@@ -80,6 +80,7 @@
         grp_nms = c('PatientICN', 'treat', 'index')
         setDT(d_surv, key=grp_nms)
     
+      # Add prob of vaccination to outcome dataset (with cloned data)
       # Data.table left join for pr_vacc for speed
         d_surv[, 
                pr_vacc := d_ipw[d_surv, 
@@ -87,16 +88,17 @@
                                 x.pr_vacc]
                ]
     
-      # IF TREAT = 1; Pr(no censor) = pr_den; 
-      # IF TREAT = 0; Pr(no cens) = 1 - pr_den;
+      # IF TREAT = 1; Pr(no censor) = Pr(vacc) = pr_vacc; 
+      # IF TREAT = 0; Pr(no censor) = Pr(1 - vacc) = 1 - pr_vacc;
         d_surv[, pr_den_a := treat*(pr_vacc) + (1-treat)*(1-pr_vacc)]
     
       # If assigned no vaccine, 1 / pr(no cens) for teach timepoint ----
       # if assign vaccine, 1 / 1 before end of grace (cannot censor)
       # you get vaccine at end of grace (day 7), 1 / pr(no cens)
-      # you get vaccine before day 7, 1 / 1  thereafter (because cannot censor after you get vaccine)
+      # you get vaccine before day 7, 1 / 1  thereafter (because no artifical censor after you get vaccine)
         grace = 7
-      
+
+        # setup here is highly project specific, here we have a grace of 7 days and daily time units
         d_surv[, `:=`(ipw_us = fcase(treat == 0, 1 / pr_den_a,
                                           treat == 1 & day < grace, 1 / 1,
                                           treat == 1 & day == grace & t_vacc==grace, 1 / pr_den_a,
@@ -145,7 +147,8 @@
       d_surv = setDF(d_surv) %>%
         select(event, day, treat, ipw_us_t)
   
-  ## Estimate survival separately for each model ----
+  ## Estimate survival separately for each treatment strategy ----
+  ## Note if you estimate in one model, its critical to have an interaction between treatment*time
     d_glm_pe_t0 = parglm.fit(
       y = d_surv$event[d_surv$treat==0],
       x = d_xmat[d_surv$treat==0, ],
